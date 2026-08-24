@@ -276,7 +276,7 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str) -> L
                     "key": key,
                     "created": safe_text(detail.get("created") or item.get("createdDate")),
                     "updated": find_last_updated_date_from_issues(session, base_url, token, key),
-                    "issue_count": issue_count,
+                    "count": issue_count,
                     "status": resolve_jira_project_status(detail),
                     "admins": jira_project_admins(session, base_url, token, key),
                     "business_owner": safe_text((detail.get("projectCategory") or {}).get("name")),
@@ -363,7 +363,7 @@ def get_confluence_spaces(session: requests.Session, base_url: str, token: str) 
                     label_name = safe_text(label.get("name") or label.get("value"))
                     if label_name:
                         labels.append(label_name)
-            categories = ", ".join(label for label in labels if "category" in label.lower())
+            categories = ", ".join(labels)
             if not categories:
                 details = metadata.get("metadata") or {}
                 props = details.get("properties") or {}
