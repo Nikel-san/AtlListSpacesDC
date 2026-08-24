@@ -293,73 +293,71 @@ def find_last_updated_date_from_issues(session: requests.Session, base_url: str,
 
 def get_jira_projects(session: requests.Session, base_url: str, token: str, verbose: bool = False) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    start_at = 0
-    while True:
-        project_list = request_json(
-            session,
-            "GET",
-            f"{base_url}/rest/api/2/project",
-            token,
-            params={"startAt": start_at, "maxResults": 50},
+    project_list = request_json(
+        session,
+        "GET",
+        f"{base_url}/rest/api/2/project",
+        token,
+    )
+    if isinstance(project_list, dict):
+        values = project_list.get("values", [])
+    elif isinstance(project_list, list):
+        values = project_list
+    else:
+        return rows
+
+    for item in values:
+        key = safe_text(item.get("key"))
+        if not key:
+            continue
+        if verbose:
+            print(f"\n  Processing project: {key}")
+        # fetch project detail
+        with timed_operation("Detail fetch", verbose):
+            try:
+                detail = request_json(
+                                    session,
+                                    "GET",
+                                    f"{base_url}/rest/api/2/project/{quote(key)}",
+                                    token,
+                )
+            except Exception:
+                detail = item
+        # issue count
+        issue_count = 0
+        with timed_operation("Issue count", verbose):
+            try:
+                count_response = request_json(
+                                    session,
+                                    "GET",
+                                    f"{base_url}/rest/api/2/search",
+                                    token,
+                                    params={"jql": f'project = "{key}"', "maxResults": 0, "fields": "id"},
+                )
+                issue_count = int(count_response.get("total", 0) or 0)
+            except Exception:
+                issue_count = 0
+        # last activity
+        with timed_operation("Last activity", verbose):
+            updated = find_last_updated_date_from_issues(session, base_url, token, key)
+        # admins
+        with timed_operation("Admins", verbose):
+            admins = jira_project_admins(session, base_url, token, key)
+        # lead / business owner (fast)
+        with timed_operation("Lead/Owner", verbose):
+            business_owner = safe_text((detail.get("projectCategory") or {}).get("name"))
+        rows.append(
+            {
+                "name": safe_text(detail.get("name") or item.get("name")),
+                "key": key,
+                "created": safe_text(detail.get("created") or item.get("createdDate")),
+                "updated": updated,
+                "count": issue_count,
+                "status": resolve_jira_project_status(detail),
+                "admins": admins,
+                "business_owner": business_owner,
+            }
         )
-        values = project_list.get("values", []) if isinstance(project_list, dict) else project_list
-        if not isinstance(values, list):
-            break
-        for item in values:
-            key = safe_text(item.get("key"))
-            if not key:
-                continue
-            if verbose:
-                print(f"\n  Processing project: {key}")
-            # fetch project detail
-            with timed_operation("Detail fetch", verbose):
-                try:
-                                    detail = request_json(
-                                        session,
-                                        "GET",
-                                        f"{base_url}/rest/api/2/project/{quote(key)}",
-                                        token,
-                                    )
-                except Exception:
-                                    detail = item
-            # issue count
-            issue_count = 0
-            with timed_operation("Issue count", verbose):
-                try:
-                                    count_response = request_json(
-                                        session,
-                                        "GET",
-                                        f"{base_url}/rest/api/2/search",
-                                        token,
-                                        params={"jql": f'project = "{key}"', "maxResults": 0, "fields": "id"},
-                                    )
-                                    issue_count = int(count_response.get("total", 0) or 0)
-                except Exception:
-                                    issue_count = 0
-            # last activity
-            with timed_operation("Last activity", verbose):
-                updated = find_last_updated_date_from_issues(session, base_url, token, key)
-            # admins
-            with timed_operation("Admins", verbose):
-                admins = jira_project_admins(session, base_url, token, key)
-            # lead / business owner (fast)
-            with timed_operation("Lead/Owner", verbose):
-                business_owner = safe_text((detail.get("projectCategory") or {}).get("name"))
-            rows.append(
-                {
-                                    "name": safe_text(detail.get("name") or item.get("name")),
-                                    "key": key,
-                                    "created": safe_text(detail.get("created") or item.get("createdDate")),
-                                    "updated": updated,
-                                    "count": issue_count,
-                                    "status": resolve_jira_project_status(detail),
-                                    "admins": admins,
-                                    "business_owner": business_owner,
-                }
-            )
-        if len(values) < 50:
-            break
-        start_at += len(values)
     return rows
 
 
