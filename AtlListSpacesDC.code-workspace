@@ -4,5 +4,16 @@
 			"path": "."
 		}
 	],
-	"settings": {}
+	"settings": {
+		"chat.tools.terminal.autoApprove": {
+			"/^python AtlListSpacesDC\\.py --help$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^git add AtlListSpacesDC\\.py; git commit -m \"ICC-45: Fix Confluence creation date and label extraction; include homepage history fallback\n\nCo-authored-by: Copilot <223556219\\+Copilot@users\\.noreply\\.github\\.com>\"; git push origin HEAD$/": {
+				"approve": true,
+				"matchCommandLine": true
+			}
+		}
+	}
 }
