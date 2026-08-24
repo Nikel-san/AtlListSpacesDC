@@ -155,13 +155,18 @@ def is_personal_space_key(space_key: str) -> bool:
     return bool(space_key) and space_key.startswith("~")
 
 
-def extract_group_members(session: requests.Session, base_url: str, token: str, group_name: str, skip_confluence_endpoints: bool = False) -> str:
-    candidates = [
-        (f"{base_url}/rest/api/2/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
-        (f"{base_url}/rest/api/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
-    ]
-    if not skip_confluence_endpoints:
-        candidates.append((f"{base_url}/rest/api/group/{quote(group_name)}/member", {"limit": 1000}))
+def extract_group_members(session: requests.Session, base_url: str, token: str, group_name: str, mode: str = "confluence") -> str:
+    # Select candidate endpoints based on the calling mode to avoid probing irrelevant APIs
+    if mode == "jira":
+        candidates = [
+            (f"{base_url}/rest/api/2/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
+        ]
+    else:
+        candidates = [
+            (f"{base_url}/rest/api/group/{quote(group_name)}/member", {"limit": 1000}),
+            (f"{base_url}/rest/api/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
+        ]
+
     seen: set[str] = set()
     for url, params in candidates:
         if url in seen:
@@ -226,7 +231,7 @@ def earliest_date(value: Any) -> str:
 
 def jira_project_admins(session: requests.Session, base_url: str, token: str, project_key: str) -> str:
     group_name = f"{project_key}-administrators"
-    return extract_group_members(session, base_url, token, group_name, skip_confluence_endpoints=True)
+    return extract_group_members(session, base_url, token, group_name, mode="jira")
 
 
 def confluence_space_admins(session: requests.Session, base_url: str, token: str, space_key: str) -> str:
