@@ -14,6 +14,8 @@ from typing import Any, Dict, Iterable, List
 from urllib.parse import quote, urlparse
 
 import requests
+import time
+from contextlib import contextmanager
 
 
 class CliArgumentParser(argparse.ArgumentParser):
@@ -38,6 +40,12 @@ def colorize(color: str, text: str) -> str:
 def parse_args() -> argparse.Namespace:
     parser = CliArgumentParser(
         description="List Atlassian Data Center projects or spaces and export them to CSV."
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Print per-item timing and verbose progress information",
     )
     parser.add_argument(
         "-t",
@@ -90,6 +98,17 @@ def normalized_site(site_url: str) -> str:
     if not cleaned.startswith("http://") and not cleaned.startswith("https://"):
         raise ValueError("Site URL must include the protocol, such as https://jira.example.com")
     return cleaned
+
+
+@contextmanager
+def timed_operation(label: str, verbose: bool = False):
+    t0 = time.time()
+    try:
+        yield
+    finally:
+        elapsed = time.time() - t0
+        if verbose:
+            print(f"    [{elapsed:6.2f}s] {label}")
 
 
 def build_headers() -> List[str]:
@@ -272,7 +291,7 @@ def find_last_updated_date_from_issues(session: requests.Session, base_url: str,
         return ""
 
 
-def get_jira_projects(session: requests.Session, base_url: str, token: str) -> List[Dict[str, Any]]:
+def get_jira_projects(session: requests.Session, base_url: str, token: str, verbose: bool = False) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     start_at = 0
     while True:
@@ -290,34 +309,52 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str) -> L
             key = safe_text(item.get("key"))
             if not key:
                 continue
-            detail = request_json(
-                session,
-                "GET",
-                f"{base_url}/rest/api/2/project/{quote(key)}",
-                token,
-            )
+            if verbose:
+                print(f"\n  Processing project: {key}")
+            # fetch project detail
+            with timed_operation("Detail fetch", verbose):
+                try:
+                                    detail = request_json(
+                                        session,
+                                        "GET",
+                                        f"{base_url}/rest/api/2/project/{quote(key)}",
+                                        token,
+                                    )
+                except Exception:
+                                    detail = item
+            # issue count
             issue_count = 0
-            try:
-                count_response = request_json(
-                    session,
-                    "GET",
-                    f"{base_url}/rest/api/2/search",
-                    token,
-                                    params={"jql": f'project = "{key}"', "maxResults": 0, "fields": "id"},
-                )
-                issue_count = int(count_response.get("total", 0) or 0)
-            except Exception:
-                issue_count = 0
+            with timed_operation("Issue count", verbose):
+                try:
+                                    count_response = request_json(
+                                        session,
+                                        "GET",
+                                        f"{base_url}/rest/api/2/search",
+                                        token,
+                                        params={"jql": f'project = "{key}"', "maxResults": 0, "fields": "id"},
+                                    )
+                                    issue_count = int(count_response.get("total", 0) or 0)
+                except Exception:
+                                    issue_count = 0
+            # last activity
+            with timed_operation("Last activity", verbose):
+                updated = find_last_updated_date_from_issues(session, base_url, token, key)
+            # admins
+            with timed_operation("Admins", verbose):
+                admins = jira_project_admins(session, base_url, token, key)
+            # lead / business owner (fast)
+            with timed_operation("Lead/Owner", verbose):
+                business_owner = safe_text((detail.get("projectCategory") or {}).get("name"))
             rows.append(
                 {
-                    "name": safe_text(detail.get("name") or item.get("name")),
-                    "key": key,
-                    "created": safe_text(detail.get("created") or item.get("createdDate")),
-                    "updated": find_last_updated_date_from_issues(session, base_url, token, key),
-                    "count": issue_count,
-                    "status": resolve_jira_project_status(detail),
-                    "admins": jira_project_admins(session, base_url, token, key),
-                    "business_owner": safe_text((detail.get("projectCategory") or {}).get("name")),
+                                    "name": safe_text(detail.get("name") or item.get("name")),
+                                    "key": key,
+                                    "created": safe_text(detail.get("created") or item.get("createdDate")),
+                                    "updated": updated,
+                                    "count": issue_count,
+                                    "status": resolve_jira_project_status(detail),
+                                    "admins": admins,
+                                    "business_owner": business_owner,
                 }
             )
         if len(values) < 50:
@@ -404,7 +441,7 @@ def get_confluence_last_activity(session: requests.Session, base_url: str, token
         return ""
 
 
-def get_confluence_spaces(session: requests.Session, base_url: str, token: str) -> List[Dict[str, Any]]:
+def get_confluence_spaces(session: requests.Session, base_url: str, token: str, verbose: bool = False) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     start = 0
     while True:
@@ -420,17 +457,27 @@ def get_confluence_spaces(session: requests.Session, base_url: str, token: str) 
             key = safe_text(item.get("key"))
             if not key or is_personal_space_key(key):
                 continue
-            metadata = collect_confluence_space_metadata(session, base_url, token, key)
-            categories = extract_confluence_labels(metadata)
+            if verbose:
+                print(f"\n  Processing space: {key}")
+            with timed_operation("Metadata fetch", verbose):
+                metadata = collect_confluence_space_metadata(session, base_url, token, key)
+            with timed_operation("Page count", verbose):
+                page_count = get_confluence_space_page_count(session, base_url, token, key)
+            with timed_operation("Last activity", verbose):
+                last_activity = get_confluence_last_activity(session, base_url, token, key)
+            with timed_operation("Admins", verbose):
+                admins = confluence_space_admins(session, base_url, token, key)
+            with timed_operation("Labels", verbose):
+                categories = extract_confluence_labels(metadata)
             rows.append(
                 {
                     "name": safe_text(item.get("name")),
                     "key": key,
                     "created": extract_confluence_created_date(item, metadata),
-                    "updated": get_confluence_last_activity(session, base_url, token, key),
-                    "count": get_confluence_space_page_count(session, base_url, token, key),
+                    "updated": last_activity,
+                    "count": page_count,
                     "status": resolve_confluence_space_status(item),
-                    "admins": confluence_space_admins(session, base_url, token, key),
+                    "admins": admins,
                     "business_owner": categories,
                 }
             )
@@ -481,12 +528,15 @@ def main() -> int:
     print(colorize("CYAN", f"Collecting {item_type} data for {site} ..."))
     session = requests.Session()
     try:
+        total_start = time.time()
         if item_type == "jira":
-            rows = get_jira_projects(session, site, token)
+            rows = get_jira_projects(session, site, token, verbose=args.verbose)
         else:
-            rows = get_confluence_spaces(session, site, token)
+            rows = get_confluence_spaces(session, site, token, verbose=args.verbose)
         write_csv(output_path, rows, item_type)
         print(colorize("GREEN", f"Completed: {len(rows)} records exported."))
+        if args.verbose:
+            print(f"\n  Total elapsed: {time.time() - total_start:.1f}s")
         return 0
     except Exception as exc:
         print(colorize("RED", f"Error: {exc}"))
