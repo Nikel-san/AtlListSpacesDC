@@ -291,6 +291,25 @@ def find_last_updated_date_from_issues(session: requests.Session, base_url: str,
         return ""
 
 
+def get_jira_project_created_date(session: requests.Session, base_url: str, token: str, project_key: str) -> str:
+    """Return the creation date of the oldest issue in the project as a proxy
+    for the project creation date. Returns '' if the project has no issues.
+    """
+    params = {
+        "jql": f'project = "{project_key}" ORDER BY created ASC',
+        "maxResults": 1,
+        "fields": "created",
+    }
+    try:
+        data = request_json(session, "GET", f"{base_url}/rest/api/2/search", token, params=params)
+        issues = data.get("issues") or []
+        if issues:
+            return safe_text((issues[0].get("fields") or {}).get("created"))
+    except Exception:
+        pass
+    return ""
+
+
 def get_jira_projects(session: requests.Session, base_url: str, token: str, verbose: bool = False) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     project_list = request_json(
@@ -337,6 +356,9 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str, verb
                 issue_count = int(count_response.get("total", 0) or 0)
             except Exception:
                 issue_count = 0
+        # creation date (use oldest issue as a proxy)
+        with timed_operation("Creation date", verbose):
+            created = get_jira_project_created_date(session, base_url, token, key)
         # last activity
         with timed_operation("Last activity", verbose):
             updated = find_last_updated_date_from_issues(session, base_url, token, key)
@@ -350,7 +372,7 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str, verb
             {
                 "name": safe_text(detail.get("name") or item.get("name")),
                 "key": key,
-                "created": safe_text(detail.get("created") or item.get("createdDate")),
+                "created": created,
                 "updated": updated,
                 "count": issue_count,
                 "status": resolve_jira_project_status(detail),
