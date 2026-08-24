@@ -186,38 +186,12 @@ def extract_group_members(session: requests.Session, base_url: str, token: str, 
 
 
 def extract_confluence_labels(metadata: Dict[str, Any] | None) -> str:
-    label_values: List[str] = []
-    metadata_section = metadata.get("metadata") if isinstance(metadata, dict) else None
-    if isinstance(metadata_section, dict):
-        candidates = [metadata_section.get("labels"), metadata.get("labels")]
-    else:
-        candidates = [metadata.get("labels") if isinstance(metadata, dict) else None]
-
-    for candidate in candidates:
-        label_items: List[Any] = []
-        if isinstance(candidate, dict):
-            label_items = candidate.get("results", [])
-        elif isinstance(candidate, list):
-            label_items = candidate
-        for label in label_items:
-            if isinstance(label, dict):
-                label_name = safe_text(label.get("name") or label.get("value"))
-                if label_name:
-                    label_values.append(label_name)
-            else:
-                label_name = safe_text(label)
-                if label_name:
-                    label_values.append(label_name)
-
-    if label_values:
-        return ", ".join(dict.fromkeys(label_values))
-
-    if isinstance(metadata, dict):
-        props = (metadata.get("metadata") or metadata).get("properties") or {}
-        if isinstance(props, dict):
-            values = [safe_text(v) for v in props.values() if isinstance(v, (str, int, float))]
-            return ", ".join(dict.fromkeys(v for v in values if v))
-    return ""
+    labels_block = (metadata.get("metadata") or {}).get("labels") or {}
+    results = labels_block.get("results") or []
+    return ", ".join(
+        item.get("name") for item in results
+        if isinstance(item, dict) and item.get("name")
+    )
 
 
 def extract_confluence_created_date(item: Dict[str, Any], metadata: Dict[str, Any]) -> str:
@@ -228,6 +202,7 @@ def extract_confluence_created_date(item: Dict[str, Any], metadata: Dict[str, An
         metadata.get("created"),
         (metadata.get("history") or {}).get("createdDate"),
         (metadata.get("history") or {}).get("created"),
+        metadata.get("_homepage_created"),
     ]
     for candidate in candidates:
         value = safe_text(candidate)
@@ -345,13 +320,32 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str) -> L
 
 def collect_confluence_space_metadata(session: requests.Session, base_url: str, token: str, space_key: str) -> Dict[str, Any]:
     try:
-        return request_json(
+        meta = request_json(
             session,
             "GET",
             f"{base_url}/rest/api/space/{quote(space_key)}",
             token,
-            params={"expand": "metadata,history"},
+            params={"expand": "metadata.labels,history,homepage"},
         )
+        # Fallback: fetch homepage content history to derive creation date when space.history is not populated
+        homepage = meta.get("homepage") or {}
+        homepage_id = homepage.get("id")
+        if homepage_id:
+            try:
+                page_data = request_json(
+                    session,
+                    "GET",
+                    f"{base_url}/rest/api/content/{quote(str(homepage_id))}",
+                    token,
+                    params={"expand": "history"},
+                )
+                created = (page_data.get("history") or {}).get("createdDate") or (page_data.get("history") or {}).get("created")
+                if created:
+                    meta["_homepage_created"] = created
+            except Exception:
+                # ignore failures fetching homepage history
+                pass
+        return meta
     except Exception:
         return {}
 
