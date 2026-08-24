@@ -105,12 +105,13 @@ def build_headers() -> List[str]:
     ]
 
 
-def request_json(session: requests.Session, method: str, url: str, token: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def request_json(session: requests.Session, method: str, url: str, token: str, params: Dict[str, Any] | None = None, timeout: int | None = None) -> Dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
     }
-    response = session.request(method=method, url=url, headers=headers, params=params, timeout=30)
+    used_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 30
+    response = session.request(method=method, url=url, headers=headers, params=params, timeout=used_timeout)
     if response.status_code >= 400:
         body = response.text[:500]
         raise RuntimeError(f"HTTP {response.status_code} for {method} {url}: {body}")
@@ -154,19 +155,21 @@ def is_personal_space_key(space_key: str) -> bool:
     return bool(space_key) and space_key.startswith("~")
 
 
-def extract_group_members(session: requests.Session, base_url: str, token: str, group_name: str) -> str:
+def extract_group_members(session: requests.Session, base_url: str, token: str, group_name: str, skip_confluence_endpoints: bool = False) -> str:
     candidates = [
         (f"{base_url}/rest/api/2/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
         (f"{base_url}/rest/api/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
-        (f"{base_url}/rest/api/group/{quote(group_name)}/member", {"limit": 1000}),
     ]
+    if not skip_confluence_endpoints:
+        candidates.append((f"{base_url}/rest/api/group/{quote(group_name)}/member", {"limit": 1000}))
     seen: set[str] = set()
     for url, params in candidates:
         if url in seen:
             continue
         seen.add(url)
         try:
-            response = request_json(session, "GET", url, token, params=params)
+            # Use a short timeout for group/member probes to avoid long delays when an endpoint exists but is slow
+            response = request_json(session, "GET", url, token, params=params, timeout=5)
             members: List[Any] = []
             if isinstance(response, dict):
                 for key in ("values", "members", "results"):
@@ -223,7 +226,7 @@ def earliest_date(value: Any) -> str:
 
 def jira_project_admins(session: requests.Session, base_url: str, token: str, project_key: str) -> str:
     group_name = f"{project_key}-administrators"
-    return extract_group_members(session, base_url, token, group_name)
+    return extract_group_members(session, base_url, token, group_name, skip_confluence_endpoints=True)
 
 
 def confluence_space_admins(session: requests.Session, base_url: str, token: str, space_key: str) -> str:
@@ -249,7 +252,7 @@ def resolve_confluence_space_status(space: Dict[str, Any]) -> str:
 
 def find_last_updated_date_from_issues(session: requests.Session, base_url: str, token: str, project_key: str) -> str:
     query = (
-        f"project = {project_key} ORDER BY updated DESC"
+            f'project = "{project_key}" ORDER BY updated DESC'
     )
     url = f"{base_url}/rest/api/2/search"
     params = {"jql": query, "maxResults": 1, "fields": "updated"}
@@ -295,7 +298,7 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str) -> L
                     "GET",
                     f"{base_url}/rest/api/2/search",
                     token,
-                    params={"jql": f"project = {key}", "maxResults": 0},
+                                    params={"jql": f'project = "{key}"', "maxResults": 0, "fields": "id"},
                 )
                 issue_count = int(count_response.get("total", 0) or 0)
             except Exception:
