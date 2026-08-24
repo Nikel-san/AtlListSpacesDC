@@ -42,12 +42,6 @@ def parse_args() -> argparse.Namespace:
         description="List Atlassian Data Center projects or spaces and export them to CSV."
     )
     parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Print per-item timing and verbose progress information",
-    )
-    parser.add_argument(
         "-t",
         "--type",
         choices=["jira", "confluence"],
@@ -71,6 +65,12 @@ def parse_args() -> argparse.Namespace:
         "--out",
         default=None,
         help="Output CSV path. Auto-generated when omitted.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Print per-item timing and verbose progress information",
     )
 
     args = parser.parse_args()
