@@ -150,12 +150,14 @@ def flatten_admins(members: Iterable[Any]) -> str:
     return ", ".join(dict.fromkeys(names))
 
 
+def is_personal_space_key(space_key: str) -> bool:
+    return bool(space_key) and space_key.startswith("~")
+
+
 def extract_group_members(session: requests.Session, base_url: str, token: str, group_name: str) -> str:
     candidates = [
         f"{base_url}/rest/api/2/group/member",
         f"{base_url}/rest/api/group/member",
-        f"{base_url}/rest/api/2/group",
-        f"{base_url}/rest/api/group",
     ]
     seen: set[str] = set()
     for url in candidates:
@@ -180,6 +182,57 @@ def extract_group_members(session: requests.Session, base_url: str, token: str, 
                 return flatten_admins(members)
         except Exception:
             continue
+    return ""
+
+
+def extract_confluence_labels(metadata: Dict[str, Any] | None) -> str:
+    label_values: List[str] = []
+    metadata_section = metadata.get("metadata") if isinstance(metadata, dict) else None
+    if isinstance(metadata_section, dict):
+        candidates = [metadata_section.get("labels"), metadata.get("labels")]
+    else:
+        candidates = [metadata.get("labels") if isinstance(metadata, dict) else None]
+
+    for candidate in candidates:
+        label_items: List[Any] = []
+        if isinstance(candidate, dict):
+            label_items = candidate.get("results", [])
+        elif isinstance(candidate, list):
+            label_items = candidate
+        for label in label_items:
+            if isinstance(label, dict):
+                label_name = safe_text(label.get("name") or label.get("value"))
+                if label_name:
+                    label_values.append(label_name)
+            else:
+                label_name = safe_text(label)
+                if label_name:
+                    label_values.append(label_name)
+
+    if label_values:
+        return ", ".join(dict.fromkeys(label_values))
+
+    if isinstance(metadata, dict):
+        props = (metadata.get("metadata") or metadata).get("properties") or {}
+        if isinstance(props, dict):
+            values = [safe_text(v) for v in props.values() if isinstance(v, (str, int, float))]
+            return ", ".join(dict.fromkeys(v for v in values if v))
+    return ""
+
+
+def extract_confluence_created_date(item: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    candidates = [
+        item.get("createdDate"),
+        item.get("created"),
+        metadata.get("createdDate"),
+        metadata.get("created"),
+        (metadata.get("history") or {}).get("createdDate"),
+        (metadata.get("history") or {}).get("created"),
+    ]
+    for candidate in candidates:
+        value = safe_text(candidate)
+        if value:
+            return value
     return ""
 
 
@@ -243,11 +296,13 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str) -> L
         project_list = request_json(
             session,
             "GET",
-            f"{base_url}/rest/api/2/project/search",
+            f"{base_url}/rest/api/2/project",
             token,
             params={"startAt": start_at, "maxResults": 50},
         )
-        values = project_list.get("values", [])
+        values = project_list.get("values", []) if isinstance(project_list, dict) else project_list
+        if not isinstance(values, list):
+            break
         for item in values:
             key = safe_text(item.get("key"))
             if not key:
@@ -303,17 +358,26 @@ def collect_confluence_space_metadata(session: requests.Session, base_url: str, 
 
 def get_confluence_space_page_count(session: requests.Session, base_url: str, token: str, space_key: str) -> int:
     try:
-        page_data = request_json(
-            session,
-            "GET",
-            f"{base_url}/rest/api/content",
-            token,
-            params={"spaceKey": space_key, "type": "page", "limit": 1, "start": 0},
-        )
-        total = page_data.get("total")
-        if total is None:
-            total = page_data.get("totalSize")
-        return int(total or 0)
+        for url, params in (
+            (
+                f"{base_url}/rest/api/search",
+                {"cql": f'space = "{space_key}" AND type = page', "limit": 1, "start": 0},
+            ),
+            (
+                f"{base_url}/rest/api/content",
+                {"spaceKey": space_key, "type": "page", "limit": 1, "start": 0},
+            ),
+        ):
+            page_data = request_json(session, "GET", url, token, params=params)
+            if isinstance(page_data, dict):
+                total = page_data.get("total")
+                if total is None:
+                    total = page_data.get("totalSize")
+                if total is not None:
+                    return int(total or 0)
+            elif isinstance(page_data, list):
+                return len(page_data)
+        return 0
     except Exception:
         return 0
 
@@ -352,27 +416,15 @@ def get_confluence_spaces(session: requests.Session, base_url: str, token: str) 
         results = space_list.get("results", [])
         for item in results:
             key = safe_text(item.get("key"))
-            if not key:
+            if not key or is_personal_space_key(key):
                 continue
             metadata = collect_confluence_space_metadata(session, base_url, token, key)
-            labels: List[str] = []
-            metadata_obj = metadata.get("metadata") or {}
-            label_results = metadata_obj.get("labels", {}).get("results", [])
-            for label in label_results:
-                if isinstance(label, dict):
-                    label_name = safe_text(label.get("name") or label.get("value"))
-                    if label_name:
-                        labels.append(label_name)
-            categories = ", ".join(labels)
-            if not categories:
-                details = metadata.get("metadata") or {}
-                props = details.get("properties") or {}
-                categories = ", ".join(safe_text(v) for v in props.values() if isinstance(v, (str, int, float)))
+            categories = extract_confluence_labels(metadata)
             rows.append(
                 {
                     "name": safe_text(item.get("name")),
                     "key": key,
-                    "created": safe_text(item.get("created") or item.get("createdDate") or metadata.get("created")),
+                    "created": extract_confluence_created_date(item, metadata),
                     "updated": get_confluence_last_activity(session, base_url, token, key),
                     "count": get_confluence_space_page_count(session, base_url, token, key),
                     "status": resolve_confluence_space_status(item),
