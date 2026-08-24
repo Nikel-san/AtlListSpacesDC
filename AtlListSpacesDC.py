@@ -156,16 +156,16 @@ def is_personal_space_key(space_key: str) -> bool:
 
 def extract_group_members(session: requests.Session, base_url: str, token: str, group_name: str) -> str:
     candidates = [
-        f"{base_url}/rest/api/2/group/member",
-        f"{base_url}/rest/api/group/member",
+        (f"{base_url}/rest/api/2/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
+        (f"{base_url}/rest/api/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
+        (f"{base_url}/rest/api/group/{quote(group_name)}/member", {"limit": 1000}),
     ]
     seen: set[str] = set()
-    for url in candidates:
+    for url, params in candidates:
         if url in seen:
             continue
         seen.add(url)
         try:
-            params = {"groupname": group_name, "maxResults": 1000, "startAt": 0}
             response = request_json(session, "GET", url, token, params=params)
             members: List[Any] = []
             if isinstance(response, dict):
@@ -350,7 +350,7 @@ def collect_confluence_space_metadata(session: requests.Session, base_url: str, 
             "GET",
             f"{base_url}/rest/api/space/{quote(space_key)}",
             token,
-            params={"expand": "metadata"},
+            params={"expand": "metadata,history"},
         )
     except Exception:
         return {}
