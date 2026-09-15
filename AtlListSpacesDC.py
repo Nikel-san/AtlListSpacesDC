@@ -156,7 +156,7 @@ def safe_text(value: Any) -> str:
     return str(value)
 
 
-def flatten_admins(members: Iterable[Any]) -> str:
+def unique_member_names(members: Iterable[Any]) -> List[str]:
     names: List[str] = []
     for member in members:
         if isinstance(member, dict):
@@ -167,7 +167,19 @@ def flatten_admins(members: Iterable[Any]) -> str:
                     break
         else:
             names.append(str(member))
-    return ", ".join(dict.fromkeys(names))
+    return list(dict.fromkeys(names))
+
+
+def flatten_admins(members: Iterable[Any]) -> str:
+    return ", ".join(unique_member_names(members))
+
+
+def summarize_group_members(members: Iterable[Any]) -> str:
+    names = unique_member_names(members)
+    if not names:
+        return "0 users"
+    label = "user" if len(names) == 1 else "users"
+    return f"{len(names)} {label} ({', '.join(names)})"
 
 
 def is_personal_space_key(space_key: str) -> bool:
@@ -206,10 +218,10 @@ def extract_group_members(session: requests.Session, base_url: str, token: str, 
             if isinstance(response, list):
                 members = response
             if members:
-                return flatten_admins(members)
+                return summarize_group_members(members)
         except Exception:
             continue
-    return ""
+    return "0 users"
 
 
 def extract_confluence_labels(metadata: Dict[str, Any] | None) -> str:
