@@ -183,6 +183,66 @@ def summarize_group_members(members: Iterable[Any]) -> str:
     return f"{len(names)} {label} ({', '.join(names)})"
 
 
+def get_group_members(session: requests.Session, base_url: str, token: str, group_name: str, mode: str = "confluence") -> List[Any]:
+    """Retrieve members for a given group from Jira DC or Confluence DC."""
+    if not group_name:
+        return []
+
+    if mode == "jira":
+        candidates = [
+            (f"{base_url}/rest/api/2/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
+            (f"{base_url}/rest/api/2/group", {"groupname": group_name, "expand": "users"}),
+        ]
+    else:
+        candidates = [
+            (f"{base_url}/rest/api/group/{quote(group_name)}/member", {"limit": 1000}),
+            (f"{base_url}/rest/api/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
+        ]
+
+    seen: set[str] = set()
+    for url, params in candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            response = request_json(session, "GET", url, token, params=params, timeout=5)
+            members: List[Any] = []
+            if isinstance(response, dict):
+                if mode == "jira":
+                    users_block = response.get("users") or {}
+                    direct = users_block.get("items") or users_block.get("values") or []
+                    if isinstance(direct, list):
+                        members = direct
+                    for key in ("values", "members", "results"):
+                        value = response.get(key)
+                        if isinstance(value, list):
+                            members = value
+                            break
+                else:
+                    for key in ("values", "members", "results"):
+                        value = response.get(key)
+                        if isinstance(value, list):
+                            members = value
+                            break
+                    if not members and isinstance(response.get("group"), dict):
+                        members = response["group"].get("members", [])
+            elif isinstance(response, list):
+                members = response
+
+            if members:
+                return members
+        except Exception:
+            continue
+    return []
+
+
+def count_group_members(session: requests.Session, base_url: str, token: str, group_name: str, mode: str = "jira") -> int:
+    """Return the total number of members in a group, or 0 if the group does not exist."""
+    if not group_name:
+        return 0
+    return len(get_group_members(session, base_url, token, group_name, mode=mode))
+
+
 def is_personal_space_key(space_key: str) -> bool:
     return bool(space_key) and space_key.startswith("~")
 
