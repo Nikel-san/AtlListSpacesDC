@@ -57,7 +57,7 @@ The generated CSV includes these columns:
 Notes:
 
 - For Jira, the script enumerates projects and sums members from the standard project access groups: `<projectkey>-administrators`, `<projectkey>-developers`, and `<projectkey>-users`.
-- For Confluence, the script keeps the `Number of Users` field empty/zero because Confluence space access groups are not consistently exposed in the same way as Jira project groups.
+- For Confluence, the script also aggregates the member counts across `<spacekey>-administrators`, `<spacekey>-developers`, and `<spacekey>-users` into the `Number of Users` column.
 - The script skips personal Confluence spaces, and admin names are flattened into a single comma-separated field.
 
 ## Behavior and Notes

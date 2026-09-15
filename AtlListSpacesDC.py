@@ -308,7 +308,15 @@ def confluence_space_admins(session: requests.Session, base_url: str, token: str
 
 
 def confluence_space_user_count(session: requests.Session, base_url: str, token: str, space_key: str) -> int:
-    return 0
+    group_names = [
+        f"{space_key}-administrators",
+        f"{space_key}-developers",
+        f"{space_key}-users",
+    ]
+    return sum(
+        count_group_members(session, base_url, token, group_name, mode="confluence")
+        for group_name in group_names
+    )
 
 
 def resolve_jira_project_status(project: Dict[str, Any]) -> str:
