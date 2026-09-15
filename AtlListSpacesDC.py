@@ -118,6 +118,7 @@ def build_headers() -> List[str]:
         "Creation Date",
         "Last Activity Date",
         "Number of Items",
+        "Number of Users",
         "Status",
         "Admins",
         "Business Owner",
@@ -187,41 +188,8 @@ def is_personal_space_key(space_key: str) -> bool:
 
 
 def extract_group_members(session: requests.Session, base_url: str, token: str, group_name: str, mode: str = "confluence") -> str:
-    # Select candidate endpoints based on the calling mode to avoid probing irrelevant APIs
-    if mode == "jira":
-        candidates = [
-            (f"{base_url}/rest/api/2/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
-        ]
-    else:
-        candidates = [
-            (f"{base_url}/rest/api/group/{quote(group_name)}/member", {"limit": 1000}),
-            (f"{base_url}/rest/api/group/member", {"groupname": group_name, "maxResults": 1000, "startAt": 0}),
-        ]
-
-    seen: set[str] = set()
-    for url, params in candidates:
-        if url in seen:
-            continue
-        seen.add(url)
-        try:
-            # Use a short timeout for group/member probes to avoid long delays when an endpoint exists but is slow
-            response = request_json(session, "GET", url, token, params=params, timeout=5)
-            members: List[Any] = []
-            if isinstance(response, dict):
-                for key in ("values", "members", "results"):
-                    value = response.get(key)
-                    if isinstance(value, list):
-                        members = value
-                        break
-                if not members and isinstance(response.get("group"), dict):
-                    members = response["group"].get("members", [])
-            if isinstance(response, list):
-                members = response
-            if members:
-                return summarize_group_members(members)
-        except Exception:
-            continue
-    return "0 users"
+    members = get_group_members(session, base_url, token, group_name, mode=mode)
+    return flatten_admins(members)
 
 
 def extract_confluence_labels(metadata: Dict[str, Any] | None) -> str:
@@ -265,9 +233,22 @@ def jira_project_admins(session: requests.Session, base_url: str, token: str, pr
     return extract_group_members(session, base_url, token, group_name, mode="jira")
 
 
+def jira_project_user_count(session: requests.Session, base_url: str, token: str, project_key: str) -> int:
+    group_names = [
+        f"{project_key}-administrators",
+        f"{project_key}-developers",
+        f"{project_key}-users",
+    ]
+    return sum(count_group_members(session, base_url, token, group_name, mode="jira") for group_name in group_names)
+
+
 def confluence_space_admins(session: requests.Session, base_url: str, token: str, space_key: str) -> str:
     group_name = f"{space_key}-administrators"
     return extract_group_members(session, base_url, token, group_name)
+
+
+def confluence_space_user_count(session: requests.Session, base_url: str, token: str, space_key: str) -> int:
+    return 0
 
 
 def resolve_jira_project_status(project: Dict[str, Any]) -> str:
@@ -377,6 +358,8 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str, verb
         # admins
         with timed_operation("Admins", verbose):
             admins = jira_project_admins(session, base_url, token, key)
+        with timed_operation("User count", verbose):
+            user_count = jira_project_user_count(session, base_url, token, key)
         # lead / business owner (fast)
         with timed_operation("Lead/Owner", verbose):
             business_owner = safe_text((detail.get("projectCategory") or {}).get("name"))
@@ -387,6 +370,7 @@ def get_jira_projects(session: requests.Session, base_url: str, token: str, verb
                 "created": created,
                 "updated": updated,
                 "count": issue_count,
+                "user_count": user_count,
                 "status": resolve_jira_project_status(detail),
                 "admins": admins,
                 "business_owner": business_owner,
@@ -499,6 +483,8 @@ def get_confluence_spaces(session: requests.Session, base_url: str, token: str, 
                 last_activity = get_confluence_last_activity(session, base_url, token, key)
             with timed_operation("Admins", verbose):
                 admins = confluence_space_admins(session, base_url, token, key)
+            with timed_operation("User count", verbose):
+                user_count = confluence_space_user_count(session, base_url, token, key)
             with timed_operation("Labels", verbose):
                 categories = extract_confluence_labels(metadata)
             rows.append(
@@ -508,6 +494,7 @@ def get_confluence_spaces(session: requests.Session, base_url: str, token: str, 
                     "created": extract_confluence_created_date(item, metadata),
                     "updated": last_activity,
                     "count": page_count,
+                    "user_count": user_count,
                     "status": resolve_confluence_space_status(item),
                     "admins": admins,
                     "business_owner": categories,
@@ -533,6 +520,7 @@ def write_csv(file_path: str, rows: List[Dict[str, Any]], item_type: str) -> Non
                     "Creation Date": row.get("created", ""),
                     "Last Activity Date": row.get("updated", ""),
                     "Number of Items": row.get("count", ""),
+                    "Number of Users": row.get("user_count", ""),
                     "Status": row.get("status", ""),
                     "Admins": row.get("admins", ""),
                     "Business Owner": row.get("business_owner", ""),

@@ -49,14 +49,15 @@ The generated CSV includes these columns:
 - Creation Date
 - Last Activity Date
 - Number of Items
+- Number of Users
 - Status
 - Admins
 - Business Owner
 
 Notes:
 
-- For Jira, the script enumerates projects and uses the oldest issue creation date as a proxy for project creation when the project metadata does not provide a direct date.
-- For Confluence, the script enumerates spaces and derives metadata such as creation date from space/homepage history when available.
+- For Jira, the script enumerates projects and sums members from the standard project access groups: `<projectkey>-administrators`, `<projectkey>-developers`, and `<projectkey>-users`.
+- For Confluence, the script keeps the `Number of Users` field empty/zero because Confluence space access groups are not consistently exposed in the same way as Jira project groups.
 - The script skips personal Confluence spaces, and admin names are flattened into a single comma-separated field.
 
 ## Behavior and Notes
